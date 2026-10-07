@@ -1,0 +1,148 @@
+name: Build slim WinPython
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag and title for the new release in this repository (for example 2026.10.1)
+        required: true
+        type: string
+      python_series:
+        description: Python series to take from the newest final WinPython release (for example 3.14)
+        required: true
+        type: string
+        default: "3.14"
+      base_url:
+        description: Optional. Direct download URL of a WinPython "dot" build, which overrides python_series
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      PY_SERIES: ${{ inputs.python_series }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve WinPython dot build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$BASE_URL" ]; then
+            URL="$BASE_URL"
+          else
+            SERIES_RE=${PY_SERIES//./\\.}
+            RE='^WinPython64-'"$SERIES_RE"'\.[0-9]+\.[0-9]+dot\.zip$'
+            URL=$(gh api "repos/winpython/winpython/releases?per_page=50" | jq -r --arg re "$RE" '[.[] | select(.draft == false and .prerelease == false) | .assets[] | select(.name | test($re)) | .browser_download_url] | first // empty' | tr -d '\r')
+          fi
+          if [ -z "$URL" ]; then
+            echo "No final WinPython release with a $PY_SERIES dot build found among the 50 newest releases."
+            exit 1
+          fi
+          echo "Using $URL"
+          echo "RESOLVED_URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Download WinPython dot build
+        run: |
+          mkdir -p dl
+          curl -fL --retry 3 -o dl/base-archive "$RESOLVED_URL"
+          ls -l dl/base-archive
+
+      - name: Extract and locate Python
+        run: |
+          7z x dl/base-archive -obuild -y > /dev/null
+          ROOT=$(find build -maxdepth 1 -type d -name 'WPy*' | head -n 1)
+          if [ -z "$ROOT" ]; then
+            echo "No WPy* folder found after extraction. Contents of build:"
+            ls -la build
+            exit 1
+          fi
+          ROOT=$(cd "$ROOT" && pwd)
+          PY=$(find "$ROOT" -maxdepth 2 -name python.exe | head -n 1)
+          if [ -z "$PY" ]; then
+            echo "python.exe not found. Contents of $ROOT:"
+            ls -la "$ROOT"
+            exit 1
+          fi
+          echo "WP_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "WP_PY=$PY" >> "$GITHUB_ENV"
+          echo "Distribution root: $ROOT"
+          echo "Python: $PY"
+          ls -la "$ROOT"
+          if [ ! -f "$ROOT/WinPython Command Prompt.exe" ]; then
+            echo "::warning::'WinPython Command Prompt.exe' is not in the base build. Update the Use section of README.md."
+          fi
+
+      - name: Install packages
+        run: |
+          "$WP_PY" -m pip install --no-cache-dir --no-compile --no-warn-script-location -r requirements.txt
+
+      - name: Make launchers movable
+        run: |
+          PYDIR=$(cygpath -w "$(dirname "$WP_PY")")
+          CODE="from wppm import wppm; wppm.Distribution(r'$PYDIR').patch_standard_packages('', to_movable=True)"
+          if ! "$WP_PY" -c "$CODE"; then
+            echo "Patching with the bundled wppm failed, trying wppm from PyPI"
+            "$WP_PY" -m pip install --no-cache-dir wppm
+            "$WP_PY" -c "$CODE"
+          fi
+
+      - name: Write package list and license inventory
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          "$WP_PY" -m pip freeze > "$WP_ROOT/installed-packages.txt"
+          PL=$(cygpath -w "$PWD/pl-tool")
+          "$WP_PY" -m pip install --no-cache-dir --no-compile --target "$PL" pip-licenses
+          IGNORE="pip-licenses prettytable wcwidth tomli"
+          PYTHONPATH="$PL" "$WP_PY" -m piplicenses --with-system --format=markdown --with-urls --ignore-packages $IGNORE > "$WP_ROOT/THIRD-PARTY-LICENSES.md"
+          PYTHONPATH="$PL" "$WP_PY" -m piplicenses --with-system --format=plain-vertical --with-license-file --no-license-path --with-notice-file --ignore-packages $IGNORE > "$WP_ROOT/THIRD-PARTY-LICENSE-TEXTS.txt"
+          rm -rf pl-tool
+          if grep -iE "GPL" "$WP_ROOT/THIRD-PARTY-LICENSES.md"; then
+            echo "::warning::Possible copyleft licenses found. Review THIRD-PARTY-LICENSES.md before publishing."
+          fi
+
+      - name: Add README and license files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$WP_ROOT/licenses"
+          cp README.md "$WP_ROOT/README-SLIM.md"
+          if [ -f LICENSE ]; then cp LICENSE "$WP_ROOT/licenses/BUILD-SCRIPTS-LICENSE.txt"; fi
+          gh api repos/winpython/winpython/license --jq .content | base64 --decode > "$WP_ROOT/licenses/WinPython-LICENSE.txt"
+          test -s "$WP_ROOT/licenses/WinPython-LICENSE.txt"
+
+      - name: Create zip
+        run: |
+          PYVER=$("$WP_PY" -c "import platform; print(platform.python_version())")
+          ARCHIVE="Slim-Python-${PYVER}-win64-${RELEASE_TAG}.zip"
+          (cd build && 7z a -tzip -mx=9 "../$ARCHIVE" "$(basename "$WP_ROOT")" > /dev/null)
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          ls -l "$ARCHIVE" "$ARCHIVE.sha256"
+          echo "PYVER=$PYVER" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Verify the zip from a different location
+        run: |
+          rm -rf build
+          7z x "$ARCHIVE" -overify -y > /dev/null
+          V=$(find verify -maxdepth 3 -name python.exe | head -n 1)
+          "$V" -c "import jupyterlab, pandas, seaborn; print('pandas', pandas.__version__, 'seaborn', seaborn.__version__)"
+          "$(dirname "$V")/Scripts/jupyter-lab.exe" --version
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="Unofficial build, not affiliated with or endorsed by the WinPython project. Python $PYVER, based on the WinPython dot build from $RESOLVED_URL. Package versions and license files are inside the archive (installed-packages.txt, THIRD-PARTY-LICENSES.md, README-SLIM.md)."
+          gh release create "$RELEASE_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes "$NOTES"
