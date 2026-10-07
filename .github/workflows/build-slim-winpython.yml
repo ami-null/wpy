@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Tag and title for the new release in this repository (for example 2026.10.1)
-        required: true
+        description: Optional. Tag and title for the new release in this repository. If empty, it is named after the WinPython release, Python version and build date (for example 2026-03-py3.14.7-20261007)
+        required: false
         type: string
+        default: ""
       python_series:
         description: Python series to take from the newest final WinPython release (for example 3.14)
         required: true
@@ -38,19 +39,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          URL=""
+          WP_RELEASE_NAME=""
           if [ -n "$BASE_URL" ]; then
             URL="$BASE_URL"
           else
             SERIES_RE=${PY_SERIES//./\\.}
             RE='^WinPython64-'"$SERIES_RE"'\.[0-9]+\.[0-9]+dot\.zip$'
-            URL=$(gh api "repos/winpython/winpython/releases?per_page=50" | jq -r --arg re "$RE" '[.[] | select(.draft == false and .prerelease == false) | .assets[] | select(.name | test($re)) | .browser_download_url] | first // empty' | tr -d '\r')
+            OUT=$(gh api "repos/winpython/winpython/releases?per_page=50" | jq -r --arg re "$RE" '[.[] | select(.draft == false and .prerelease == false) | . as $r | $r.assets[] | select(.name | test($re)) | {url: .browser_download_url, release: ($r.name // "")}] | first // empty | "\(.url)\t\(.release)"' | tr -d '\r')
+            IFS=$'\t' read -r URL WP_RELEASE_NAME <<< "$OUT"
           fi
           if [ -z "$URL" ]; then
             echo "No final WinPython release with a $PY_SERIES dot build found among the 50 newest releases."
             exit 1
           fi
-          echo "Using $URL"
+          CYCLE=$(echo "$WP_RELEASE_NAME" | grep -oE '[0-9]{4}-[0-9]{2}' | head -n 1 || true)
+          echo "Using $URL (release: ${WP_RELEASE_NAME:-unknown}, cycle: ${CYCLE:-unknown})"
           echo "RESOLVED_URL=$URL" >> "$GITHUB_ENV"
+          echo "WP_RELEASE_NAME=$WP_RELEASE_NAME" >> "$GITHUB_ENV"
+          echo "WP_CYCLE=$CYCLE" >> "$GITHUB_ENV"
 
       - name: Download WinPython dot build
         run: |
@@ -125,11 +132,13 @@ jobs:
       - name: Create zip
         run: |
           PYVER=$("$WP_PY" -c "import platform; print(platform.python_version())")
-          ARCHIVE="Slim-Python-${PYVER}-win64-${RELEASE_TAG}.zip"
+          BUILD_DATE=$(date -u +%Y%m%d)
+          ARCHIVE="Slim-Python-${PYVER}-win64-${BUILD_DATE}.zip"
           (cd build && 7z a -tzip -mx=9 "../$ARCHIVE" "$(basename "$WP_ROOT")" > /dev/null)
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
           ls -l "$ARCHIVE" "$ARCHIVE.sha256"
           echo "PYVER=$PYVER" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$BUILD_DATE" >> "$GITHUB_ENV"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Verify the zip from a different location
@@ -137,12 +146,28 @@ jobs:
           rm -rf build
           7z x "$ARCHIVE" -overify -y > /dev/null
           V=$(find verify -maxdepth 3 -name python.exe | head -n 1)
+          PYDIR=$(cd "$(dirname "$V")" && pwd)
           "$V" -c "import jupyterlab, pandas, seaborn; print('pandas', pandas.__version__, 'seaborn', seaborn.__version__)"
-          "$(dirname "$V")/Scripts/jupyter-lab.exe" --version
+          # Movable WinPython launchers call a bare python.exe, so the Python folder has to be first on PATH, as it is in WinPython Command Prompt
+          PATH="$PYDIR:$PATH" "$PYDIR/Scripts/jupyter-lab.exe" --version
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Unofficial build, not affiliated with or endorsed by the WinPython project. Python $PYVER, based on the WinPython dot build from $RESOLVED_URL. Package versions and license files are inside the archive (installed-packages.txt, THIRD-PARTY-LICENSES.md, README-SLIM.md)."
-          gh release create "$RELEASE_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes "$NOTES"
+          TAG="$RELEASE_TAG"
+          if [ -z "$TAG" ]; then
+            TAG="py${PYVER}-${BUILD_DATE}"
+            if [ -n "$WP_CYCLE" ]; then TAG="${WP_CYCLE}-${TAG}"; fi
+            BASE_TAG="$TAG"
+            N=1
+            while gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; do
+              N=$((N + 1))
+              TAG="${BASE_TAG}-${N}"
+            done
+          fi
+          echo "Release tag: $TAG"
+          BASE_DESC="$RESOLVED_URL"
+          if [ -n "$WP_RELEASE_NAME" ]; then BASE_DESC="\"$WP_RELEASE_NAME\" ($RESOLVED_URL)"; fi
+          NOTES="Unofficial build, not affiliated with or endorsed by the WinPython project. Python $PYVER, based on the WinPython dot build from $BASE_DESC. Package versions and license files are inside the archive (installed-packages.txt, THIRD-PARTY-LICENSES.md, README-SLIM.md)."
+          gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$NOTES"

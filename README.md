@@ -14,9 +14,9 @@ This is an independent project. It is not an official WinPython release, and it 
 
 1. Download the `.zip` file from the Releases page. The `.sha256` file next to it can be used to check the download.
 2. Extract it to a folder you can write to, for example `C:\Python` or `D:\tools`. Avoid `Program Files` and very long paths. No installation or administrator rights are needed.
-3. Open `WinPython Command Prompt.exe` in the extracted folder and run `jupyter lab`.
+3. Double-click `Jupyter Lab.exe` in the extracted folder. Alternatively, open `WinPython Command Prompt.exe` and run `jupyter lab`.
 
-Additional packages can be installed from the same command prompt with `pip install <package>`. Nothing is installed system-wide, so removing the distribution means deleting its folder.
+Additional packages can be installed from `WinPython Command Prompt.exe` with `pip install <package>`. Nothing is installed system-wide, so removing the distribution means deleting its folder.
 
 ## Licensing
 
@@ -40,5 +40,5 @@ This distribution is provided as is, without warranty of any kind. The terms of 
 ## Building it yourself
 
 1. Edit `requirements.txt` (pin versions if you want identical builds over time).
-2. In the Actions tab, run the workflow "Build slim WinPython". Enter a release tag. By default the workflow takes the dot build of the newest final WinPython release that has Python 3.14. Change `python_series` to use another Python version, or give a direct `base_url` to use a specific WinPython dot build.
+2. In the Actions tab, run the workflow "Build slim WinPython". The release tag is optional. If you leave it empty, the release is named after the WinPython release, the Python version and the build date, for example `2026-03-py3.14.7-20261007`. By default the workflow takes the dot build of the newest final WinPython release that has Python 3.14. Change `python_series` to use another Python version, or give a direct `base_url` to use a specific WinPython dot build.
 3. The workflow builds the distribution, writes the package and license inventory into it, zips it, checks that the zip works from a different location, and publishes it as a release.
