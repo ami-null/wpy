@@ -1,0 +1,14 @@
+distlib
+jupyterlab
+jupyter-lsp
+python-lsp-server[all]
+numpy
+pandas
+xlrd
+openpyxl
+matplotlib
+seaborn
+scipy
+statsmodels
+scikit-learn
+ISLP
