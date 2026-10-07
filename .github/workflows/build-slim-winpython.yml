@@ -94,7 +94,7 @@ jobs:
         run: |
           "$WP_PY" -m pip install --no-cache-dir --no-compile --no-warn-script-location -r requirements.txt
 
-      - name: Set JupyterLab defaults (fonts, brackets, hover documentation)
+      - name: Set JupyterLab defaults (fonts, brackets, completion)
         run: |
           PREFIX=$(cygpath -u "$("$WP_PY" -c "import sys; print(sys.prefix)")")
           SETTINGS="$PREFIX/share/jupyter/lab/settings"
@@ -104,13 +104,17 @@ jobs:
             "@jupyterlab/apputils-extension:themes": {
               "overrides": {
                 "code-font-family": "Consolas, monospace",
-                "code-font-size": "12px"
+                "code-font-size": "16px"
               }
             },
             "@jupyterlab/codemirror-extension:plugin": {
               "defaultConfig": { "autoClosingBrackets": true }
             },
-            "@jupyter-lsp/jupyterlab-lsp:hover": { "autoActivate": true }
+            "@jupyterlab/completer-extension:manager": {
+              "autoCompletion": true,
+              "showDocumentationPanel": true
+            },
+            "@jupyter-lsp/jupyterlab-lsp:completion": { "continuousHinting": true }
           }
           EOF
           "$WP_PY" -c "import json,sys; json.load(open(sys.argv[1])); print('overrides.json is valid')" "$(cygpath -w "$SETTINGS/overrides.json")"

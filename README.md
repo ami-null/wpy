@@ -16,6 +16,8 @@ This is an independent project. It is not an official WinPython release, and it 
 2. Extract it to a folder you can write to, for example `C:\Python` or `D:\tools`. Avoid `Program Files` and very long paths. No installation or administrator rights are needed.
 3. Double-click `Jupyter Lab.exe` in the extracted folder. Alternatively, open `WinPython Command Prompt.exe` and run `jupyter lab`.
 
+Code completion appears as you type, with a documentation panel next to the list. To see the documentation of a name in a notebook or editor, hold Ctrl and hover over it.
+
 Launchers for tools that are not set up in this distribution (IDLE, Spyder, VS Code and Jupyter Notebook) are in the `unused-launchers` folder. Move one back to the main folder to use it. Additional packages can be installed from `WinPython Command Prompt.exe` with `pip install <package>`. Nothing is installed system-wide, so removing the distribution means deleting its folder.
 
 ## Licensing
