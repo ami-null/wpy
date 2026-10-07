@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Optional. Tag and title for the new release in this repository. If empty, it is named after the WinPython release, Python version and build date (for example 2026-03-py3.14.7-20261007)
+        description: Optional. Tag and title for the new release in this repository. If empty, it is named after the WinPython release, Python version and UTC build time (for example 2026-03-py3.14.7-20261007-2215)
         required: false
         type: string
         default: ""
@@ -94,6 +94,27 @@ jobs:
         run: |
           "$WP_PY" -m pip install --no-cache-dir --no-compile --no-warn-script-location -r requirements.txt
 
+      - name: Set JupyterLab defaults (fonts, brackets, hover documentation)
+        run: |
+          PREFIX=$(cygpath -u "$("$WP_PY" -c "import sys; print(sys.prefix)")")
+          SETTINGS="$PREFIX/share/jupyter/lab/settings"
+          mkdir -p "$SETTINGS"
+          cat > "$SETTINGS/overrides.json" <<'EOF'
+          {
+            "@jupyterlab/apputils-extension:themes": {
+              "overrides": {
+                "code-font-family": "Consolas, monospace",
+                "code-font-size": "12px"
+              }
+            },
+            "@jupyterlab/codemirror-extension:plugin": {
+              "defaultConfig": { "autoClosingBrackets": true }
+            },
+            "@jupyter-lsp/jupyterlab-lsp:hover": { "autoActivate": true }
+          }
+          EOF
+          "$WP_PY" -c "import json,sys; json.load(open(sys.argv[1])); print('overrides.json is valid')" "$(cygpath -w "$SETTINGS/overrides.json")"
+
       - name: Make launchers movable
         run: |
           PYDIR=$(cygpath -w "$(dirname "$WP_PY")")
@@ -129,16 +150,30 @@ jobs:
           gh api repos/winpython/winpython/license --jq .content | base64 --decode > "$WP_ROOT/licenses/WinPython-LICENSE.txt"
           test -s "$WP_ROOT/licenses/WinPython-LICENSE.txt"
 
+      - name: Move unused launchers to a backup folder
+        run: |
+          BACKUP="$WP_ROOT/unused-launchers"
+          mkdir -p "$BACKUP"
+          for f in "IDLE (Python GUI).exe" "Spyder.exe" "Spyder reset.exe" "VS Code.exe" "Jupyter Notebook.exe"; do
+            if [ -f "$WP_ROOT/$f" ]; then
+              mv "$WP_ROOT/$f" "$BACKUP/"
+            else
+              echo "::warning::$f was not found in the base build"
+            fi
+          done
+          echo "These launchers are for tools that are not set up in this distribution. Move one back to the parent folder to use it." > "$BACKUP/README.txt"
+          ls -la "$WP_ROOT" "$BACKUP"
+
       - name: Create zip
         run: |
           PYVER=$("$WP_PY" -c "import platform; print(platform.python_version())")
-          BUILD_DATE=$(date -u +%Y%m%d)
-          ARCHIVE="Slim-Python-${PYVER}-win64-${BUILD_DATE}.zip"
+          BUILD_STAMP=$(date -u +%Y%m%d-%H%M)
+          ARCHIVE="Slim-Python-${PYVER}-win64-${BUILD_STAMP}.zip"
           (cd build && 7z a -tzip -mx=9 "../$ARCHIVE" "$(basename "$WP_ROOT")" > /dev/null)
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
           ls -l "$ARCHIVE" "$ARCHIVE.sha256"
           echo "PYVER=$PYVER" >> "$GITHUB_ENV"
-          echo "BUILD_DATE=$BUILD_DATE" >> "$GITHUB_ENV"
+          echo "BUILD_STAMP=$BUILD_STAMP" >> "$GITHUB_ENV"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Verify the zip from a different location
@@ -157,7 +192,7 @@ jobs:
         run: |
           TAG="$RELEASE_TAG"
           if [ -z "$TAG" ]; then
-            TAG="py${PYVER}-${BUILD_DATE}"
+            TAG="py${PYVER}-${BUILD_STAMP}"
             if [ -n "$WP_CYCLE" ]; then TAG="${WP_CYCLE}-${TAG}"; fi
             BASE_TAG="$TAG"
             N=1
@@ -169,5 +204,5 @@ jobs:
           echo "Release tag: $TAG"
           BASE_DESC="$RESOLVED_URL"
           if [ -n "$WP_RELEASE_NAME" ]; then BASE_DESC="\"$WP_RELEASE_NAME\" ($RESOLVED_URL)"; fi
-          NOTES="Unofficial build, not affiliated with or endorsed by the WinPython project. Python $PYVER, based on the WinPython dot build from $BASE_DESC. Package versions and license files are inside the archive (installed-packages.txt, THIRD-PARTY-LICENSES.md, README-SLIM.md)."
+          NOTES="Unofficial build, not affiliated with or endorsed by the WinPython project. Built $BUILD_STAMP UTC. Python $PYVER, based on the WinPython dot build from $BASE_DESC. Package versions and license files are inside the archive (installed-packages.txt, THIRD-PARTY-LICENSES.md, README-SLIM.md)."
           gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$NOTES"

@@ -1,7 +1,8 @@
 distlib
 jupyterlab
-jupyter-lsp
-python-lsp-server[all]
+jupyterlab-lsp
+python-lsp-server[pyflakes]
+jupyterlab-indent-guides
 numpy
 pandas
 xlrd
